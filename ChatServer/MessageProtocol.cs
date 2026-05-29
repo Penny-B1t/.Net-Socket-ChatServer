@@ -46,6 +46,9 @@ public static class MessageProtocol
             _bufferSize = 0;
         }
 
+
+        // ReadOnlySpan으로 형 변환 시 실제 데이터가 존재하는 메모리 위치 참조만 가져옴. _length 값만을 가르킨다
+        // Span은 참조지만, 스택에 할당됨. 데이터를 보기위한 포인터 위치를 담는다
         public List<string> Parse(ReadOnlySpan<byte> newData)
         {
             var messages = new List<string>();
