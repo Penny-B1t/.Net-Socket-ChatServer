@@ -8,10 +8,11 @@ public class ClientSession
     private readonly Socket _socket;
     private readonly ChatServer _server; 
     private readonly ArrayPool<byte> _bufferPool;
-    private byte[] _buffer;
+    private byte[]? _buffer;
     private const int BUFFER_SIZE = 4096; // 최대 사용가능 버퍼 크기
 
     private bool _isConnected;
+    private readonly MessageProtocol.MessageDecoder _decoder;
 
     public int Id { get; }
     public string ClientName { get; set; }
@@ -25,6 +26,7 @@ public class ClientSession
         _bufferPool = server.GetBufferPool();
         _buffer = _bufferPool.Rent(BUFFER_SIZE); // 연결 1개당 버퍼 1개 사용
         _isConnected = true;
+        _decoder = new MessageProtocol.MessageDecoder();
     }
 
     // 세션 내부 데이터 송신 스레드
@@ -33,24 +35,27 @@ public class ClientSession
         try 
         {
 
+            // 세션 생성 초기 사용자 이름 수신
             ClientName = await ReceiveClientNameAsync();
-
             // 세션 내 등록
             await _server.RegisterClientAsync(this, ClientName);
 
             // 메시지 수신 루프 
             while(_isConnected && _socket.Connected)
             {
-                int byteRead = await _socket.ReceiveAsync(_buffer, SocketFlags.None);
+                int byteRead = await _socket.ReceiveAsync(_buffer!, SocketFlags.None);
 
                 if(byteRead == 0)
                 {
                     break;
                 }
 
-                string jsonMessage = Encoding.UTF8.GetString(_buffer, 0, byteRead);
-
-                await ProcessMessageAsync(jsonMessage);
+                var messages = _decoder.Parse(_buffer!.AsSpan(0, byteRead));
+                
+                foreach (string jsonMessage in messages)
+                {
+                    await ProcessMessageAsync(jsonMessage); // 순서 보장하며 안전하게 비동기 순차 처리
+                }
                 
             }
 
@@ -70,13 +75,15 @@ public class ClientSession
     {
         // 1초 타임아웃으로 이름 수신
         using var cts = new CancellationTokenSource(1000);
+        byte[]? buffer = _buffer;
+        if (buffer == null) return $"User_{Id}";
         
         try
         {
-            int bytesRead = await _socket.ReceiveAsync(_buffer, SocketFlags.None, cts.Token);
+            int bytesRead = await _socket.ReceiveAsync(buffer, SocketFlags.None, cts.Token);
             if (bytesRead > 0)
             {
-                return Encoding.UTF8.GetString(_buffer, 0, bytesRead).Trim();
+                return Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
             }
         }
         catch (OperationCanceledException)
@@ -127,7 +134,7 @@ public class ClientSession
     {
         if (!_isConnected || !_socket.Connected) return;
 
-        byte[] data = Encoding.UTF8.GetBytes(message);
+        byte[] data = MessageProtocol.Encode(message);
         await _socket.SendAsync(data, SocketFlags.None);
     }
     public async Task SendAsync(byte[] data)
@@ -148,7 +155,7 @@ public class ClientSession
             _socket.Shutdown(SocketShutdown.Both);
             _socket.Close();
         }
-        catch (Exception e)
+        catch (Exception)
         {
             // 소켓 관련 오류 무시 : 이미 연결이 끊어졌기 때문에 발생하는 오류
             // 정상적인 상황에서 오류가 발생하면 소켓을 종료할 수 없다는 것은 이미 연결이 끊어졌다는 뜻 
@@ -160,6 +167,8 @@ public class ClientSession
             _bufferPool.Return(_buffer);
             _buffer = null;
         }
+
+        _decoder.Clear();
 
         _ = _server.UnregisterClientAsync(this); // 세션 등록 해제
     }

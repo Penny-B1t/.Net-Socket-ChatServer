@@ -116,7 +116,7 @@ public class ChatServer
     public async Task BroadcastAsync(ChatMessage message, string excludeClient = null)
     {
         string json = message.ToJson();
-        byte[] data = Encoding.UTF8.GetBytes(json);
+        byte[] data = MessageProtocol.Encode(json);
 
         var tasks = _clients.Values
         .Where(c => excludeClient == null || c.ClientName != excludeClient)

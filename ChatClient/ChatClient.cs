@@ -10,6 +10,7 @@ public class ChatClient
     private bool _isConnected;
     private byte[] _buffer;
     private readonly ArrayPool<byte> _bufferPool = ArrayPool<byte>.Shared;
+    private readonly MessageProtocol.MessageDecoder _decoder = new MessageProtocol.MessageDecoder();
     
     public async Task StartAsync(string serverIp, int port, string userName)
     {
@@ -53,10 +54,12 @@ public class ChatClient
                 int bytesRead = await _socket.ReceiveAsync(_buffer, SocketFlags.None);
                 if (bytesRead == 0) break;
                 
-                string json = Encoding.UTF8.GetString(_buffer, 0, bytesRead);
-                var message = ChatMessage.FromJson(json);
-                
-                DisplayMessage(message);
+                var messages = _decoder.Parse(_buffer.AsSpan(0, bytesRead));
+                foreach (string json in messages)
+                {
+                    var message = ChatMessage.FromJson(json);
+                    DisplayMessage(message);
+                }
             }
         }
         catch (SocketException)
@@ -134,7 +137,7 @@ public class ChatClient
         if (!_isConnected) return;
         
         string json = message.ToJson();
-        byte[] data = Encoding.UTF8.GetBytes(json);
+        byte[] data = MessageProtocol.Encode(json);
         await _socket.SendAsync(data, SocketFlags.None);
     }
     
@@ -188,6 +191,7 @@ public class ChatClient
             _bufferPool.Return(_buffer);
             _buffer = null;
         }
+        _decoder.Clear();
         Console.WriteLine("연결 종료");
     }
 }
